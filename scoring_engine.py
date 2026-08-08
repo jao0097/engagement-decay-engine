@@ -13,6 +13,8 @@ precisa saber) qual implementacao concreta esta em uso.
 import re
 from abc import ABC, abstractmethod
 
+import pandas as pd
+
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF]+")
 
 
@@ -39,6 +41,18 @@ class HeuristicScorer(EngagementScorer):
 
     QUESTION_BONUS = 0.15
     LENGTH_CAP_CHARS = 240
+    SELF_PROMO_PATTERNS = [
+        re.compile(
+            r"(confir[ae]|visit[ae]|segu[ae]|inscrev[ae]|assist[ae])"
+            r".{0,25}(meu|nosso).{0,10}(canal|perfil|instagram|insta)",
+            re.IGNORECASE,
+        ),
+        re.compile(r"link\s*na\s*bio", re.IGNORECASE),
+        re.compile(r"me\s+segue", re.IGNORECASE),
+        re.compile(r"(clique|acesse)\s+(no|o)\s+link", re.IGNORECASE),
+    ]
+    DUP_MIN_CHARS = 40
+    DUP_MIN_COUNT = 3
 
     def score(self, comment: dict) -> float:
         text = (comment.get("text") or "").strip()
@@ -47,6 +61,9 @@ class HeuristicScorer(EngagementScorer):
 
         sem_emoji = EMOJI_PATTERN.sub("", text).strip()
         if len(sem_emoji) <= 2 or re.fullmatch(r"(k|h|s|rs|haha)+[\s!.]*", sem_emoji.lower()):
+            return 0.0
+
+        if any(padrao.search(text) for padrao in self.SELF_PROMO_PATTERNS):
             return 0.0
 
         comprimento_normalizado = min(len(sem_emoji), self.LENGTH_CAP_CHARS) / self.LENGTH_CAP_CHARS
@@ -59,6 +76,24 @@ class HeuristicScorer(EngagementScorer):
             score += self.QUESTION_BONUS
 
         return max(0.0, min(score, 1.0))
+
+    def score_batch(self, comments: list[dict]) -> list[float]:
+        textos = pd.Series(
+            [EMOJI_PATTERN.sub("", (c.get("text") or "")).strip().lower() for c in comments]
+        )
+        normalizados = (
+            textos.str.replace(r"[^0-9a-zà-öø-ÿ\s]", "", regex=True)
+            .str.replace(r"\s+", " ", regex=True)
+            .str.strip()
+        )
+
+        contagem = normalizados.value_counts()
+        e_repetido = (normalizados.map(contagem) >= self.DUP_MIN_COUNT).to_numpy()
+        e_longo = (normalizados.str.len() > self.DUP_MIN_CHARS).to_numpy()
+        e_duplicata_spam = e_repetido & e_longo
+
+        scores = [self.score(c) for c in comments]
+        return [0.0 if dup else s for dup, s in zip(e_duplicata_spam, scores)]
 
 
 class CategoryWeightedScorer(EngagementScorer):
