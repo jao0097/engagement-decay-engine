@@ -54,10 +54,11 @@ def load_and_score_comments(raw_path: str, classified_path: str) -> pd.DataFrame
         df = pd.DataFrame(raw)
         del raw
         scorer = CategoryWeightedScorer()
-        df["quality_score"] = [
-            scorer.score({"categorias": cats, "score_engajamento": score})
+        comentarios = [
+            {"categorias": cats, "score_engajamento": score}
             for cats, score in zip(df.get("categorias", [[]] * len(df)), df.get("score_engajamento", [None] * len(df)))
         ]
+        df["quality_score"] = scorer.score_batch(comentarios)
         print(f"  {len(df):,} comentarios pontuados (CategoryWeightedScorer) em {time.time() - t0:.1f}s".replace(",", "."))
         return df
 
@@ -73,7 +74,8 @@ def load_and_score_comments(raw_path: str, classified_path: str) -> pd.DataFrame
     t0 = time.time()
     scorer = HeuristicScorer()
     textos = df["text"].fillna("")
-    df["quality_score"] = [scorer.score({"text": t}) for t in textos]
+    comentarios = [{"text": t} for t in textos]
+    df["quality_score"] = scorer.score_batch(comentarios)
     print(f"  {len(df):,} comentarios pontuados (HeuristicScorer) em {time.time() - t0:.1f}s".replace(",", "."))
     return df
 
