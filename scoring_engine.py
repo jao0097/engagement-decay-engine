@@ -13,6 +13,8 @@ precisa saber) qual implementacao concreta esta em uso.
 import re
 from abc import ABC, abstractmethod
 
+import pandas as pd
+
 EMOJI_PATTERN = re.compile("[\U0001F300-\U0001FAFF\U00002600-\U000027BF]+")
 
 
@@ -49,6 +51,8 @@ class HeuristicScorer(EngagementScorer):
         re.compile(r"me\s+segue", re.IGNORECASE),
         re.compile(r"(clique|acesse)\s+(no|o)\s+link", re.IGNORECASE),
     ]
+    DUP_MIN_CHARS = 40
+    DUP_MIN_COUNT = 3
 
     def score(self, comment: dict) -> float:
         text = (comment.get("text") or "").strip()
@@ -72,6 +76,18 @@ class HeuristicScorer(EngagementScorer):
             score += self.QUESTION_BONUS
 
         return max(0.0, min(score, 1.0))
+
+    def score_batch(self, comments: list[dict]) -> list[float]:
+        textos = pd.Series([(c.get("text") or "").strip().lower() for c in comments])
+        normalizados = textos.str.replace(r"[^\w\s]", "", regex=True).str.strip()
+
+        contagem = normalizados.value_counts()
+        e_repetido = (normalizados.map(contagem) >= self.DUP_MIN_COUNT).to_numpy()
+        e_longo = (normalizados.str.len() > self.DUP_MIN_CHARS).to_numpy()
+        e_duplicata_spam = e_repetido & e_longo
+
+        scores = [self.score(c) for c in comments]
+        return [0.0 if dup else s for dup, s in zip(e_duplicata_spam, scores)]
 
 
 class CategoryWeightedScorer(EngagementScorer):

@@ -58,6 +58,35 @@ class TestHeuristicScorer:
         resultados = self.scorer.score_batch(comentarios)
         assert resultados == [self.scorer.score(c) for c in comentarios]
 
+    def test_duplicata_longa_em_lote_score_zero(self):
+        texto_longo = "Esse video mudou minha forma de pensar sobre o assunto"
+        comentarios = [{"text": texto_longo}] * 3
+        resultados = self.scorer.score_batch(comentarios)
+        assert resultados == [0.0, 0.0, 0.0]
+
+    def test_duplicata_curta_nao_e_zerada(self):
+        comentarios = [{"text": "top demais"}] * 5
+        resultados = self.scorer.score_batch(comentarios)
+        individual = self.scorer.score({"text": "top demais"})
+        assert individual > 0.0
+        assert resultados == [individual] * 5
+
+    def test_duplicata_abaixo_do_minimo_nao_e_zerada(self):
+        texto_longo = "Esse video mudou minha forma de pensar sobre o assunto"
+        comentarios = [{"text": texto_longo}] * 2
+        resultados = self.scorer.score_batch(comentarios)
+        individual = self.scorer.score({"text": texto_longo})
+        assert resultados == [individual, individual]
+
+    def test_score_batch_ainda_bate_com_score_individual_sem_duplicata(self):
+        comentarios = [
+            {"text": "Muito bom esse video, aprendi bastante!"},
+            {"text": "Qual a fonte desse dado que voce citou?"},
+            {"text": "kkkkk"},
+        ]
+        resultados = self.scorer.score_batch(comentarios)
+        assert resultados == [self.scorer.score(c) for c in comentarios]
+
 
 class TestCategoryWeightedScorer:
     def setup_method(self):
