@@ -39,6 +39,16 @@ class HeuristicScorer(EngagementScorer):
 
     QUESTION_BONUS = 0.15
     LENGTH_CAP_CHARS = 240
+    SELF_PROMO_PATTERNS = [
+        re.compile(
+            r"(confir[ae]|visit[ae]|segu[ae]|inscrev[ae]|assist[ae])"
+            r".{0,25}(meu|nosso).{0,10}(canal|perfil|instagram|insta)",
+            re.IGNORECASE,
+        ),
+        re.compile(r"link\s*na\s*bio", re.IGNORECASE),
+        re.compile(r"me\s+segue", re.IGNORECASE),
+        re.compile(r"(clique|acesse)\s+(no|o)\s+link", re.IGNORECASE),
+    ]
 
     def score(self, comment: dict) -> float:
         text = (comment.get("text") or "").strip()
@@ -47,6 +57,9 @@ class HeuristicScorer(EngagementScorer):
 
         sem_emoji = EMOJI_PATTERN.sub("", text).strip()
         if len(sem_emoji) <= 2 or re.fullmatch(r"(k|h|s|rs|haha)+[\s!.]*", sem_emoji.lower()):
+            return 0.0
+
+        if any(padrao.search(text) for padrao in self.SELF_PROMO_PATTERNS):
             return 0.0
 
         comprimento_normalizado = min(len(sem_emoji), self.LENGTH_CAP_CHARS) / self.LENGTH_CAP_CHARS

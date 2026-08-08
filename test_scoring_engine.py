@@ -33,6 +33,20 @@ class TestHeuristicScorer:
         com_pergunta = self.scorer.score({"text": "Isso funciona em todos os casos?"})
         assert com_pergunta > base
 
+    def test_autopromocao_score_zero(self):
+        frases = [
+            "Confira meu canal lá no instagram, tem conteúdo top!",
+            "Segue lá, tem link na bio pra quem quiser conferir",
+            "Gente, me segue lá que eu posto todo dia",
+            "Clique no link da descrição pra saber mais",
+        ]
+        for frase in frases:
+            assert self.scorer.score({"text": frase}) == 0.0
+
+    def test_texto_legitimo_com_palavra_canal_nao_e_zerado(self):
+        texto = "Gostei muito do canal de vocês, o conteúdo é sempre muito bem explicado"
+        assert self.scorer.score({"text": texto}) > 0.0
+
     def test_score_sempre_em_faixa_valida(self):
         textos = ["", "kkk", "a" * 5000, "🎉🎉🎉 muito bom mesmo, adorei o video!"]
         for texto in textos:
