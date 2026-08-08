@@ -1,0 +1,159 @@
+"""
+Extrai todos os comentarios (e respostas) de todos os videos de um canal do YouTube,
+usando a YouTube Data API v3.
+
+Estrategia de cota:
+- Usa playlistItems.list (1 unidade) para listar videos, em vez de search.list (100 unidades).
+- commentThreads.list custa 1 unidade por chamada, com paginacao de 100 comentarios por pagina.
+"""
+
+import json
+import os
+import time
+
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+YOUTUBE_API_SERVICE_NAME = "youtube"
+YOUTUBE_API_VERSION = "v3"
+
+
+def get_youtube_client(api_key: str):
+    return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
+
+
+def get_uploads_playlist_id(youtube, channel_id: str) -> str:
+    """Pega o ID da playlist 'uploads' do canal (todos os videos publicados)."""
+    response = youtube.channels().list(part="contentDetails", id=channel_id).execute()
+    items = response.get("items", [])
+    if not items:
+        raise ValueError(f"Canal nao encontrado: {channel_id}")
+    return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+
+def get_all_video_ids(youtube, playlist_id: str) -> list[dict]:
+    """Retorna lista de {video_id, title, published_at} de todos os videos da playlist."""
+    videos = []
+    page_token = None
+
+    while True:
+        response = (
+            youtube.playlistItems()
+            .list(
+                part="contentDetails,snippet",
+                playlistId=playlist_id,
+                maxResults=50,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        for item in response.get("items", []):
+            videos.append(
+                {
+                    "video_id": item["contentDetails"]["videoId"],
+                    "title": item["snippet"]["title"],
+                    "published_at": item["contentDetails"].get("videoPublishedAt", ""),
+                }
+            )
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return videos
+
+
+def get_comments_for_video(youtube, video_id: str) -> list[dict]:
+    """
+    Retorna todos os comentarios (top-level + respostas) de um video.
+    Se os comentarios estiverem desabilitados, retorna lista vazia em vez de quebrar.
+    """
+    comments = []
+    page_token = None
+
+    while True:
+        try:
+            response = (
+                youtube.commentThreads()
+                .list(
+                    part="snippet,replies",
+                    videoId=video_id,
+                    maxResults=100,
+                    pageToken=page_token,
+                    textFormat="plainText",
+                )
+                .execute()
+            )
+        except HttpError as e:
+            reason = ""
+            if e.error_details:
+                reason = e.error_details[0].get("reason", "")
+            if reason == "commentsDisabled":
+                return []
+            if reason == "quotaExceeded":
+                raise
+            # erro inesperado: loga e para esse video, mas nao quebra o resto da coleta
+            print(f"  [aviso] erro ao buscar comentarios do video {video_id}: {e}")
+            return comments
+
+        for thread in response.get("items", []):
+            top = thread["snippet"]["topLevelComment"]["snippet"]
+            comments.append(
+                {
+                    "comment_id": thread["snippet"]["topLevelComment"]["id"],
+                    "video_id": video_id,
+                    "parent_id": None,
+                    "author": top.get("authorDisplayName", ""),
+                    "text": top.get("textDisplay", ""),
+                    "like_count": top.get("likeCount", 0),
+                    "published_at": top.get("publishedAt", ""),
+                }
+            )
+
+            for reply in thread.get("replies", {}).get("comments", []):
+                r = reply["snippet"]
+                comments.append(
+                    {
+                        "comment_id": reply["id"],
+                        "video_id": video_id,
+                        "parent_id": thread["snippet"]["topLevelComment"]["id"],
+                        "author": r.get("authorDisplayName", ""),
+                        "text": r.get("textDisplay", ""),
+                        "like_count": r.get("likeCount", 0),
+                        "published_at": r.get("publishedAt", ""),
+                    }
+                )
+
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+
+    return comments
+
+
+def extract_channel_comments(api_key: str, channel_id: str, output_path: str) -> list[dict]:
+    """Fluxo completo: lista videos do canal, extrai comentarios de cada um, salva em JSON."""
+    youtube = get_youtube_client(api_key)
+
+    print(f"Buscando playlist de uploads do canal {channel_id}...")
+    playlist_id = get_uploads_playlist_id(youtube, channel_id)
+
+    print("Listando videos...")
+    videos = get_all_video_ids(youtube, playlist_id)
+    print(f"  {len(videos)} videos encontrados.")
+
+    all_comments = []
+    for i, video in enumerate(videos, start=1):
+        print(f"[{i}/{len(videos)}] Extraindo comentarios de: {video['title'][:60]}")
+        video_comments = get_comments_for_video(youtube, video["video_id"])
+        for c in video_comments:
+            c["video_title"] = video["title"]
+        all_comments.extend(video_comments)
+        time.sleep(0.05)  # pequena folga para nao martelar a API
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(all_comments, f, ensure_ascii=False, indent=2)
+
+    print(f"\nTotal de comentarios extraidos: {len(all_comments)}")
+    print(f"Salvo em: {output_path}")
+    return all_comments
