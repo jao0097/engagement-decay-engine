@@ -79,7 +79,7 @@ class HeuristicScorer(EngagementScorer):
 
     def score_batch(self, comments: list[dict]) -> list[float]:
         textos = pd.Series([(c.get("text") or "").strip().lower() for c in comments])
-        normalizados = textos.str.replace(r"[^\w\s]", "", regex=True).str.strip()
+        normalizados = textos.str.replace(r"[.,!?;:()\"\'\-]", "", regex=True).str.strip()
 
         contagem = normalizados.value_counts()
         e_repetido = (normalizados.map(contagem) >= self.DUP_MIN_COUNT).to_numpy()

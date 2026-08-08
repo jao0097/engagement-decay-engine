@@ -87,6 +87,14 @@ class TestHeuristicScorer:
         resultados = self.scorer.score_batch(comentarios)
         assert resultados == [self.scorer.score(c) for c in comentarios]
 
+    def test_duplicata_acentuada_longa_em_lote_score_zero(self):
+        # Test accented Portuguese comment (70 chars after normalization, well above DUP_MIN_CHARS=40)
+        texto_longo = "Esse vídeo é ótimo, aprendi muito com a explicação sobre esse assunto"
+        comentarios = [{"text": texto_longo}] * 3
+        resultados = self.scorer.score_batch(comentarios)
+        # Should detect as duplicate spam (3+ repetitions, >40 chars after normalization)
+        assert resultados == [0.0, 0.0, 0.0]
+
 
 class TestCategoryWeightedScorer:
     def setup_method(self):
