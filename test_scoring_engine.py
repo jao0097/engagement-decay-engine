@@ -78,6 +78,27 @@ class TestHeuristicScorer:
         individual = self.scorer.score({"text": texto_longo})
         assert resultados == [individual, individual]
 
+    def test_duplicata_com_emoji_variando_ainda_e_detectada(self):
+        # Emoji nao deve contar como caractere distintivo: o mesmo texto
+        # longo com um emoji diferente no final ainda e a mesma duplicata.
+        texto_longo = "Esse video mudou minha forma de pensar sobre o assunto"
+        comentarios = [
+            {"text": texto_longo + " 🎉"},
+            {"text": texto_longo + " 🔥"},
+            {"text": texto_longo + " 😀"},
+        ]
+        resultados = self.scorer.score_batch(comentarios)
+        assert resultados == [0.0, 0.0, 0.0]
+
+    def test_emoji_nao_conta_para_o_limiar_de_caracteres(self):
+        # Texto curto com varios emoji nao deve ultrapassar DUP_MIN_CHARS
+        # so por causa dos emoji (que sao removidos na normalizacao).
+        texto_curto_com_emoji = "Gratidao pelos esclarecimentos.🙏🙏😊"
+        comentarios = [{"text": texto_curto_com_emoji}] * 5
+        resultados = self.scorer.score_batch(comentarios)
+        individual = self.scorer.score({"text": texto_curto_com_emoji})
+        assert resultados == [individual] * 5
+
     def test_score_batch_ainda_bate_com_score_individual_sem_duplicata(self):
         comentarios = [
             {"text": "Muito bom esse video, aprendi bastante!"},
@@ -88,8 +109,11 @@ class TestHeuristicScorer:
         assert resultados == [self.scorer.score(c) for c in comentarios]
 
     def test_duplicata_acentuada_longa_em_lote_score_zero(self):
-        # Test accented Portuguese comment (70 chars after normalization, well above DUP_MIN_CHARS=40)
-        texto_longo = "Esse vídeo é ótimo, aprendi muito com a explicação sobre esse assunto"
+        # 42 chars normalizados preservando acentos; so 37 se os acentos forem
+        # removidos (regressao: \w e ASCII-only no dtype str do pandas 3.x) --
+        # esse texto so fica acima do DUP_MIN_CHARS=40 se a normalizacao
+        # preservar corretamente os acentos.
+        texto_longo = "Muito bom o vídeo, ótima explicação técnica"
         comentarios = [{"text": texto_longo}] * 3
         resultados = self.scorer.score_batch(comentarios)
         # Should detect as duplicate spam (3+ repetitions, >40 chars after normalization)
