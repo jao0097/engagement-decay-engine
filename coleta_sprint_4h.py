@@ -369,3 +369,68 @@ def coletar_instagram(targets: list[str]) -> list[dict]:
             logger.warning("Instagram: falha ao parsear perfil %s (estrutura mudou?), pulando: %s", username, e)
         time.sleep(random.uniform(1.0, 3.0))
     return all_rows
+
+
+def _parse_lista(valor: str | None) -> list[str]:
+    if not valor:
+        return []
+    return [item.strip() for item in valor.split(",") if item.strip()]
+
+
+def salvar_csv(rows: list[dict], output_path: str) -> None:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Coleta omnichannel de engajamento (YouTube/Reddit/Instagram)")
+    parser.add_argument("--youtube", type=str, default=None, help="Canais separados por virgula (ID, URL ou @handle)")
+    parser.add_argument("--reddit", type=str, default=None, help="Subreddits separados por virgula (nome, r/nome ou URL)")
+    parser.add_argument("--instagram", type=str, default=None, help="Perfis separados por virgula (username, @user ou URL)")
+    args = parser.parse_args()
+
+    youtube_targets = _parse_lista(args.youtube) or DEFAULT_YOUTUBE_TARGETS
+    reddit_targets = _parse_lista(args.reddit) or DEFAULT_REDDIT_TARGETS
+    instagram_targets = _parse_lista(args.instagram) or DEFAULT_INSTAGRAM_TARGETS
+
+    if not args.youtube:
+        logger.info("Nenhum --youtube informado, usando alvos default de teste: %s", youtube_targets)
+    if not args.reddit:
+        logger.info("Nenhum --reddit informado, usando alvos default de teste: %s", reddit_targets)
+    if not args.instagram:
+        logger.info("Nenhum --instagram informado, usando alvos default de teste: %s", instagram_targets)
+
+    youtube_api_key = os.getenv("YOUTUBE_API_KEY")
+    if not youtube_api_key:
+        logger.error("YOUTUBE_API_KEY nao definido no .env — coleta do YouTube sera pulada")
+        youtube_targets = []
+
+    all_rows: list[dict] = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {}
+        if youtube_targets:
+            futures[executor.submit(coletar_youtube, youtube_api_key, youtube_targets)] = "youtube"
+        if reddit_targets:
+            futures[executor.submit(coletar_reddit, reddit_targets)] = "reddit"
+        if instagram_targets:
+            futures[executor.submit(coletar_instagram, instagram_targets)] = "instagram"
+
+        for future in as_completed(futures):
+            plataforma = futures[future]
+            try:
+                rows = future.result()
+                all_rows.extend(rows)
+                logger.info("%s: coleta finalizada, %d linhas", plataforma, len(rows))
+            except Exception as e:
+                logger.error("%s: coleta falhou por completo, dados dessa plataforma perdidos: %s", plataforma, e)
+
+    salvar_csv(all_rows, RAW_OUTPUT_PATH)
+    logger.info("Total de linhas coletadas: %d", len(all_rows))
+    logger.info("Salvo em: %s", RAW_OUTPUT_PATH)
+
+
+if __name__ == "__main__":
+    main()
