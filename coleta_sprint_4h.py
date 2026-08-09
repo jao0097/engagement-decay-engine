@@ -293,3 +293,79 @@ def coletar_reddit(targets: list[str], posts_por_sub: int = 60) -> list[dict]:
             time.sleep(1.1)  # ~54 req/min, abaixo do limite de 60/min
         logger.info("Reddit: %d posts coletados de r/%s", collected, sub)
     return all_rows
+
+
+def _instagram_parse_profile_posts(html: str, username: str) -> list[dict]:
+    """Extrai posts do JSON embutido (window._sharedData) no HTML publico do perfil.
+    Instagram muda essa estrutura sem aviso — qualquer falha aqui e' capturada
+    pelo chamador (coletar_instagram), nunca propaga."""
+    soup = BeautifulSoup(html, "lxml")
+    script_text = None
+    for script in soup.find_all("script"):
+        content = script.string or ""
+        if "window._sharedData" in content:
+            script_text = content
+            break
+    if script_text is None:
+        raise ValueError("window._sharedData nao encontrado no HTML (estrutura mudou ou bloqueio)")
+
+    match = re.search(r"window\._sharedData\s*=\s*(\{.*?\});", script_text, re.DOTALL)
+    if not match:
+        raise ValueError("nao foi possivel extrair JSON de window._sharedData")
+
+    shared_data = json.loads(match.group(1))
+    profile_page = shared_data["entry_data"]["ProfilePage"][0]
+    edges = profile_page["graphql"]["user"]["edge_owner_to_timeline_media"]["edges"]
+
+    rows = []
+    for edge in edges:
+        node = edge["node"]
+        caption_edges = node.get("edge_media_to_caption", {}).get("edges", [])
+        caption = caption_edges[0]["node"]["text"] if caption_edges else ""
+        created_iso = datetime.fromtimestamp(
+            node["taken_at_timestamp"], tz=timezone.utc
+        ).isoformat()
+        views = node.get("video_view_count", 0) if node.get("is_video") else 0
+        rows.append(
+            {
+                "platform": "instagram",
+                "content_id": node["shortcode"],
+                "title": caption,
+                "channel_title": "",
+                "username": username,
+                "subreddit": "",
+                "created_at": created_iso,
+                "likes": node.get("edge_liked_by", {}).get("count", 0),
+                "comments": node.get("edge_media_to_comment", {}).get("count", 0),
+                "views": views,
+            }
+        )
+    return rows
+
+
+def coletar_instagram(targets: list[str]) -> list[dict]:
+    """Coleta posts de uma lista de perfis publicos via scraping anonimo de HTML.
+    Perfil que falhar (429/403, bloqueio, mudanca de estrutura) e' pulado sem
+    interromper a coleta dos demais perfis nem das outras plataformas."""
+    all_rows: list[dict] = []
+    headers = {"User-Agent": BROWSER_USER_AGENT}
+    for raw_target in targets:
+        username = normalizar_instagram_target(raw_target)
+        try:
+            resp = requests.get(
+                f"https://www.instagram.com/{username}/",
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            rows = _instagram_parse_profile_posts(resp.text, username)
+            all_rows.extend(rows)
+            logger.info("Instagram: %d posts coletados de %s", len(rows), username)
+        except requests.HTTPError as e:
+            logger.warning("Instagram: HTTP %s ao acessar %s, pulando perfil", e.response.status_code if e.response else "?", username)
+        except requests.RequestException as e:
+            logger.warning("Instagram: erro de rede ao acessar %s, pulando perfil: %s", username, e)
+        except (ValueError, KeyError, IndexError, json.JSONDecodeError) as e:
+            logger.warning("Instagram: falha ao parsear perfil %s (estrutura mudou?), pulando: %s", username, e)
+        time.sleep(random.uniform(1.0, 3.0))
+    return all_rows
