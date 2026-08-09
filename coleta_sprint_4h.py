@@ -236,3 +236,60 @@ def coletar_youtube(api_key: str, targets: list[str]) -> list[dict]:
         all_rows.extend(rows)
         logger.info("YouTube: %d linhas coletadas de %s (total ate agora: %d)", len(rows), raw_target, len(all_rows))
     return all_rows
+
+
+def coletar_reddit(targets: list[str], posts_por_sub: int = 60) -> list[dict]:
+    """Coleta posts 'hot' de uma lista de subreddits via endpoint publico (sem OAuth)."""
+    all_rows: list[dict] = []
+    headers = {"User-Agent": REDDIT_USER_AGENT}
+    for raw_target in targets:
+        sub = normalizar_reddit_target(raw_target)
+        collected = 0
+        after = None
+        while collected < posts_por_sub:
+            try:
+                resp = requests.get(
+                    f"https://www.reddit.com/r/{sub}/hot.json",
+                    params={"limit": 100, "after": after},
+                    headers=headers,
+                    timeout=10,
+                )
+                resp.raise_for_status()
+            except requests.RequestException as e:
+                logger.warning("Reddit: erro ao buscar r/%s: %s", sub, e)
+                break
+            data = resp.json()
+            children = data.get("data", {}).get("children", [])
+            if not children:
+                break
+            for child in children:
+                post = child.get("data", {})
+                try:
+                    created_iso = datetime.fromtimestamp(
+                        post["created_utc"], tz=timezone.utc
+                    ).isoformat()
+                    all_rows.append(
+                        {
+                            "platform": "reddit",
+                            "content_id": post["id"],
+                            "title": post.get("title", ""),
+                            "channel_title": "",
+                            "username": post.get("author", ""),
+                            "subreddit": sub,
+                            "created_at": created_iso,
+                            "likes": post.get("score", 0),
+                            "comments": post.get("num_comments", 0),
+                            "views": 0,
+                        }
+                    )
+                    collected += 1
+                except (KeyError, TypeError, ValueError) as e:
+                    logger.warning("Reddit: post malformado em r/%s, pulando: %s", sub, e)
+                if collected >= posts_por_sub:
+                    break
+            after = data.get("data", {}).get("after")
+            if not after:
+                break
+            time.sleep(1.1)  # ~54 req/min, abaixo do limite de 60/min
+        logger.info("Reddit: %d posts coletados de r/%s", collected, sub)
+    return all_rows
