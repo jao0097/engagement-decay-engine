@@ -102,3 +102,137 @@ def normalizar_instagram_target(raw: str) -> str:
     if raw.startswith("@"):
         return raw[1:]
     return raw
+
+
+YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+
+
+def _youtube_resolve_channel_id(api_key: str, target: str) -> str | None:
+    """Se target for @handle, resolve para channel_id via forHandle. Se ja for UC..., devolve direto."""
+    if not target.startswith("@"):
+        return target
+    try:
+        resp = requests.get(
+            f"{YOUTUBE_API_BASE}/channels",
+            params={"part": "id", "forHandle": target.lstrip("@"), "key": api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if not items:
+            logger.warning("YouTube: handle %s nao encontrado", target)
+            return None
+        return items[0]["id"]
+    except requests.RequestException as e:
+        logger.warning("YouTube: erro ao resolver handle %s: %s", target, e)
+        return None
+
+
+def _youtube_get_uploads_playlist_id(api_key: str, channel_id: str) -> str | None:
+    try:
+        resp = requests.get(
+            f"{YOUTUBE_API_BASE}/channels",
+            params={"part": "contentDetails", "id": channel_id, "key": api_key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        if not items:
+            logger.warning("YouTube: canal %s nao encontrado", channel_id)
+            return None
+        return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    except (requests.RequestException, KeyError) as e:
+        logger.warning("YouTube: erro ao buscar playlist de uploads de %s: %s", channel_id, e)
+        return None
+
+
+def _youtube_get_video_ids(api_key: str, playlist_id: str, limite: int = 250) -> list[str]:
+    video_ids: list[str] = []
+    page_token = None
+    while len(video_ids) < limite:
+        try:
+            resp = requests.get(
+                f"{YOUTUBE_API_BASE}/playlistItems",
+                params={
+                    "part": "contentDetails",
+                    "playlistId": playlist_id,
+                    "maxResults": 50,
+                    "pageToken": page_token,
+                    "key": api_key,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            logger.warning("YouTube: erro ao listar videos da playlist %s: %s", playlist_id, e)
+            break
+        data = resp.json()
+        for item in data.get("items", []):
+            video_ids.append(item["contentDetails"]["videoId"])
+        page_token = data.get("nextPageToken")
+        time.sleep(0.05)
+        if not page_token:
+            break
+    return video_ids[:limite]
+
+
+def _youtube_get_videos_stats(api_key: str, video_ids: list[str], channel_title: str) -> list[dict]:
+    """Busca statistics+snippet em lotes de 50 IDs por chamada."""
+    rows = []
+    for i in range(0, len(video_ids), 50):
+        batch = video_ids[i : i + 50]
+        try:
+            resp = requests.get(
+                f"{YOUTUBE_API_BASE}/videos",
+                params={
+                    "part": "statistics,snippet",
+                    "id": ",".join(batch),
+                    "key": api_key,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            logger.warning("YouTube: erro ao buscar estatisticas do lote %d: %s", i, e)
+            continue
+        for item in resp.json().get("items", []):
+            try:
+                stats = item.get("statistics", {})
+                snippet = item["snippet"]
+                rows.append(
+                    {
+                        "platform": "youtube",
+                        "content_id": item["id"],
+                        "title": snippet.get("title", ""),
+                        "channel_title": snippet.get("channelTitle", channel_title),
+                        "username": "",
+                        "subreddit": "",
+                        "created_at": snippet.get("publishedAt", ""),
+                        "likes": stats.get("likeCount", 0),
+                        "comments": stats.get("commentCount", 0),
+                        "views": stats.get("viewCount", 0),
+                    }
+                )
+            except KeyError as e:
+                logger.warning("YouTube: video com campo faltando, pulando: %s", e)
+        time.sleep(0.05)
+    return rows
+
+
+def coletar_youtube(api_key: str, targets: list[str]) -> list[dict]:
+    """Coleta estatisticas de videos de uma lista de canais (ID, URL ou handle)."""
+    all_rows: list[dict] = []
+    for raw_target in targets:
+        normalized = normalizar_youtube_target(raw_target)
+        channel_id = _youtube_resolve_channel_id(api_key, normalized)
+        if not channel_id:
+            continue
+        playlist_id = _youtube_get_uploads_playlist_id(api_key, channel_id)
+        if not playlist_id:
+            continue
+        video_ids = _youtube_get_video_ids(api_key, playlist_id)
+        logger.info("YouTube: %d videos encontrados para %s", len(video_ids), raw_target)
+        rows = _youtube_get_videos_stats(api_key, video_ids, channel_title=raw_target)
+        all_rows.extend(rows)
+        logger.info("YouTube: %d linhas coletadas de %s (total ate agora: %d)", len(rows), raw_target, len(all_rows))
+    return all_rows
