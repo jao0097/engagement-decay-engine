@@ -47,6 +47,92 @@ class TestParseWhatsappExport:
     def test_arquivo_vazio(self):
         assert parse_whatsapp_export("") == []
 
+    def test_notificacao_de_entrada_apos_mensagem_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - Bruno entrou usando o link de convite deste grupo\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["author"] == "Joao Silva"
+        assert resultado[0]["text"] == "oi pessoal"
+        assert resultado[1]["author"] == "Maria Souza"
+
+    def test_notificacao_de_saida_apos_mensagem_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - Carla saiu\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+
+    def test_notificacao_de_adicionado_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - Ana adicionou Carla\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+
+    def test_notificacao_de_removido_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - Ana removeu Bruno\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+
+    def test_notificacao_mudanca_de_nome_com_dois_pontos_nao_cria_autor_fantasma(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            '12/08/2026 22:11 - Ana mudou o nome do grupo para: "Novo Nome"\n'
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+        assert resultado[1]["author"] == "Maria Souza"
+        autores = {m["author"] for m in resultado}
+        assert "Ana mudou o nome do grupo para" not in autores
+
+    def test_notificacao_mudanca_de_descricao_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - Ana mudou a descricao do grupo\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+
+    def test_notificacao_criptografia_apos_mensagem_nao_e_concatenada(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: oi pessoal\n"
+            "12/08/2026 22:11 - As mensagens e as ligacoes agora sao protegidas "
+            "com a criptografia de ponta a ponta.\n"
+            "12/08/2026 22:12 - Maria Souza: tudo bem?"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "oi pessoal"
+
+    def test_continuacao_real_sem_prefixo_de_timestamp_ainda_concatena(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: primeira linha\n"
+            "segunda linha sem prefixo de timestamp\n"
+            "12/08/2026 22:12 - Maria Souza: outra mensagem"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[0]["text"] == "primeira linha\nsegunda linha sem prefixo de timestamp"
+
 
 class TestIsSystemMessage:
     def test_midia_oculta(self):
