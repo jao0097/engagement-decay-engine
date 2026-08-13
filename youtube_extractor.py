@@ -18,6 +18,33 @@ YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
 
+def _get_error_reason(e: HttpError) -> str:
+    """Extrai o 'reason' do erro da API, tratando error_details como lista OU string."""
+    details = e.error_details
+    if isinstance(details, list) and details and isinstance(details[0], dict):
+        return details[0].get("reason", "")
+    return ""
+
+
+def _execute_with_retry(request, max_retries: int = 3):
+    """
+    Executa uma request da API do YouTube com retry curto em erros transitorios.
+    commentsDisabled e quotaExceeded nao sao retentados (nao adianta tentar de novo).
+    """
+    for attempt in range(max_retries):
+        try:
+            return request.execute()
+        except HttpError as e:
+            reason = _get_error_reason(e)
+            if reason in ("commentsDisabled", "quotaExceeded"):
+                raise
+            if attempt == max_retries - 1:
+                raise
+            wait = 2 ** attempt
+            print(f"  [retry] erro transitorio ({reason or e}), tentativa {attempt + 1}/{max_retries}, aguardando {wait}s...")
+            time.sleep(wait)
+
+
 def get_youtube_client(api_key: str):
     return build(YOUTUBE_API_SERVICE_NAME, YOUTUBE_API_VERSION, developerKey=api_key)
 
