@@ -313,9 +313,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 
 def insert_events(conn: sqlite3.Connection, events: pd.DataFrame) -> None:
-    """Insere (ou atualiza) autores e eventos de engajamento a partir de um DataFrame."""
+    """Insere (ou atualiza) autores e eventos de engajamento a partir de um DataFrame.
+
+    Espera as colunas: event_id, event_source_id, platform, author_channel_id,
+    author_display_name, content_id, published_at, quality_score, categorias.
+    """
     autores = (
-        events[["author_channel_id", "author_display_name"]]
+        events[["author_channel_id", "author_display_name", "platform"]]
         .drop_duplicates("author_channel_id")
         .copy()
     )
@@ -324,15 +328,16 @@ def insert_events(conn: sqlite3.Connection, events: pd.DataFrame) -> None:
     autores["last_seen_at"] = now_iso
     conn.executemany(
         """
-        INSERT INTO authors (author_channel_id, author_display_name, first_seen_at, last_seen_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO authors (author_channel_id, author_display_name, platform, first_seen_at, last_seen_at)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(author_channel_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
         """,
-        autores[["author_channel_id", "author_display_name", "first_seen_at", "last_seen_at"]].values.tolist(),
+        autores[["author_channel_id", "author_display_name", "platform", "first_seen_at", "last_seen_at"]]
+        .values.tolist(),
     )
 
-    colunas = ["event_id", "comment_id", "author_channel_id", "video_id", "published_at",
-               "quality_score", "categorias"]
+    colunas = ["event_id", "event_source_id", "platform", "author_channel_id", "content_id",
+               "published_at", "quality_score", "categorias"]
     conn.executemany(
         f"""
         INSERT OR REPLACE INTO engagement_events ({", ".join(colunas)})

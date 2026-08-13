@@ -232,8 +232,9 @@ def test_persistencia_sqlite_round_trip(tmp_path):
     eventos = _eventos_dois_autores().copy()
     eventos["author_display_name"] = eventos["author_channel_id"]
     eventos["event_id"] = [f"e{i}" for i in range(len(eventos))]
-    eventos["comment_id"] = eventos["event_id"]
-    eventos["video_id"] = "v1"
+    eventos["event_source_id"] = eventos["event_id"]
+    eventos["platform"] = "youtube"
+    eventos["content_id"] = "v1"
     eventos["categorias"] = ""
     de.insert_events(conn, eventos)
 
@@ -245,3 +246,23 @@ def test_persistencia_sqlite_round_trip(tmp_path):
 
     assert recarregado.loc["A", "energy"] == pytest.approx(state.loc["A", "energy"])
     assert recarregado.loc["A", "level"] == state.loc["A", "level"]
+
+
+def test_insert_events_persiste_platform(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = de.get_connection(str(db_path))
+    de.init_schema(conn)
+
+    eventos = _eventos_dois_autores().copy()
+    eventos["author_display_name"] = eventos["author_channel_id"]
+    eventos["event_id"] = [f"e{i}" for i in range(len(eventos))]
+    eventos["event_source_id"] = eventos["event_id"]
+    eventos["platform"] = "whatsapp"
+    eventos["content_id"] = "Grupo Teste"
+    eventos["categorias"] = ""
+    de.insert_events(conn, eventos)
+
+    linhas = conn.execute("SELECT DISTINCT platform FROM engagement_events").fetchall()
+    conn.close()
+
+    assert linhas == [("whatsapp",)]
