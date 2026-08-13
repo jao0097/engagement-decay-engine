@@ -32,9 +32,10 @@ def quick_classify(text: str) -> list[str] | None:
     if len(sem_emoji) <= 2 or re.fullmatch(r"(k|h|s|rs|haha)+[\s!.]*", sem_emoji):
         return ["sem_conteudo_classificavel"]
 
-    # agradecimento puro e curto, sem pergunta
+    # agradecimento puro e curto, sem pergunta e sem negacao
     if len(limpo.split()) <= 6 and "?" not in limpo:
-        if re.search(r"\bobrigad|gratid[aã]o|valeu\b", limpo):
+        tem_negacao = re.search(r"\bn[ãa]o\b", limpo)
+        if re.search(r"\bobrigad|gratid[aã]o|valeu\b", limpo) and not tem_negacao:
             return ["agradecimento"]
 
     return None  # caso ambíguo, manda pro LLM
@@ -46,7 +47,8 @@ def normalizar(text: str) -> str:
     t = re.sub(r"\s+", " ", t)
     return t
 MODEL = "llama-3.1-8b-instant"
-BATCH_SIZE = 100  # Aumentando para processar mais por chamada
+BATCH_SIZE = 50  # 100 arriscava truncar a resposta JSON do modelo
+MAX_TOKENS_PER_BATCH = 4096
 
 CATEGORIES = [
     "agradecimento",
@@ -58,6 +60,13 @@ CATEGORIES = [
     "spam_irrelevante",
     "sem_conteudo_classificavel",
 ]
+
+
+def _validate_categorias(categorias: list[str]) -> list[str]:
+    """Mantem so categorias conhecidas; se nenhuma sobrar, cai no default."""
+    validas = [c for c in categorias if c in CATEGORIES]
+    return validas if validas else ["sem_conteudo_classificavel"]
+
 
 # Se o LLM falhar ou não retornar score, forçamos um valor coerente com o default.
 # Mas vamos ajustar o SYSTEM_PROMPT para ser ainda mais rígido.
@@ -94,6 +103,7 @@ def classify_batch(client: Groq, batch: list[dict], max_retries: int = 5) -> dic
             response = client.chat.completions.create(
                 model=MODEL,
                 response_format={"type": "json_object"},
+                max_tokens=MAX_TOKENS_PER_BATCH,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": _build_user_prompt(batch)},
@@ -120,10 +130,7 @@ def classify_batch(client: Groq, batch: list[dict], max_retries: int = 5) -> dic
 
 def classify_comments(api_keys: list[str], comments: list[dict]) -> list[dict]:
     """Classifica todos os comentarios em lotes, com suporte a checkpoint para continuar de onde parou."""
-    clients = [Groq(api_key=key) for key in api_keys]
-    current_client_idx = 0
     classified = []
-
 
     # Carrega progresso anterior se houver
     classified_ids = set()
@@ -144,11 +151,14 @@ def classify_comments(api_keys: list[str], comments: list[dict]) -> list[dict]:
         print("Todos os comentarios ja foram classificados no checkpoint anterior!")
         return classified
 
+    # Cria clientes Groq apenas se ha trabalho a fazer
+    clients = [Groq(api_key=key) for key in api_keys]
+    current_client_idx = 0
+
     # Nova logica: quick_classify + Deduplicacao
     print(f"Processando {len(to_classify)} comentarios novos...")
-    
+
     # 1. Quick Classify
-    final_results = {}
     remaining_for_llm = []
     
     for c in to_classify:
@@ -199,15 +209,17 @@ def classify_comments(api_keys: list[str], comments: list[dict]) -> list[dict]:
         for rep in batch:
             result = results.get(rep["comment_id"])
             norm = normalizar(rep["text"])
-            
+
             for c in groups[norm]:
                 if result and "score_engajamento" in result:
-                    c["categorias"] = result.get("categorias", ["sem_conteudo_classificavel"])
+                    c["categorias"] = _validate_categorias(result.get("categorias", []))
                     c["score_engajamento"] = float(result.get("score_engajamento", 0.0))
+                elif result:
+                    c["categorias"] = _validate_categorias(result.get("categorias", []))
+                    c["score_engajamento"] = 0.2
                 else:
-                    # Fallback robusto se o LLM falhar no campo
-                    c["categorias"] = result.get("categorias", ["sem_conteudo_classificavel"]) if result else ["sem_conteudo_classificavel"]
-                    c["score_engajamento"] = 0.2 if result else 0.0
+                    c["categorias"] = ["sem_conteudo_classificavel"]
+                    c["score_engajamento"] = 0.0
                 classified.append(c)
 
         # Salva o checkpoint em disco a cada lote processado

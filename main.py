@@ -24,14 +24,21 @@ load_dotenv()
 
 RAW_COMMENTS_PATH = "./data/comentarios_brutos.json"
 CLASSIFIED_COMMENTS_PATH = "./data/comentarios_classificados.json"
+DEFAULT_CHANNEL_ID = "UC1Nm7gQCcGvgLyVcGTXp-Ww"
+
+
+def _parse_args(argv: list[str]) -> tuple[str, bool]:
+    """Retorna (channel_id, reclassify) a partir de sys.argv[1:]."""
+    reclassify = "--reclassify" in argv
+    positional = [a for a in argv if not a.startswith("--")]
+    channel_id = positional[0] if positional else DEFAULT_CHANNEL_ID
+    return channel_id, reclassify
 
 
 def main():
-    if len(sys.argv) < 2:
-        channel_id = "UC1Nm7gQCcGvgLyVcGTXp-Ww"
+    channel_id, reclassify = _parse_args(sys.argv[1:])
+    if channel_id == DEFAULT_CHANNEL_ID:
         print(f"Nenhum CHANNEL_ID especificado. Usando o canal padrão do sistema: {channel_id}")
-    else:
-        channel_id = sys.argv[1]
 
     youtube_api_key = os.getenv("YOUTUBE_API_KEY")
     groq_api_key = os.getenv("GROQ_API_KEY")
@@ -56,14 +63,20 @@ def main():
         print("Nenhum comentario encontrado. Encerrando.")
         return
 
-    # Etapa 2: classificacao
-    print("\n=== Classificando comentarios ===")
-    classified = classify_comments(groq_api_keys, comments)
+    # Etapa 2: classificacao (pula se ja existe, a menos que --reclassify seja passado)
+    if os.path.exists(CLASSIFIED_COMMENTS_PATH) and not reclassify:
+        print(f"\nArquivo {CLASSIFIED_COMMENTS_PATH} ja existe, pulando classificacao.")
+        print("(passe --reclassify para forcar reclassificacao)\n")
+        with open(CLASSIFIED_COMMENTS_PATH, encoding="utf-8") as f:
+            classified = json.load(f)
+    else:
+        print("\n=== Classificando comentarios ===")
+        classified = classify_comments(groq_api_keys, comments)
 
-    os.makedirs(os.path.dirname(CLASSIFIED_COMMENTS_PATH), exist_ok=True)
-    with open(CLASSIFIED_COMMENTS_PATH, "w", encoding="utf-8") as f:
-        json.dump(classified, f, ensure_ascii=False, indent=2)
-    print(f"Classificacao salva em: {CLASSIFIED_COMMENTS_PATH}")
+        os.makedirs(os.path.dirname(CLASSIFIED_COMMENTS_PATH), exist_ok=True)
+        with open(CLASSIFIED_COMMENTS_PATH, "w", encoding="utf-8") as f:
+            json.dump(classified, f, ensure_ascii=False, indent=2)
+        print(f"Classificacao salva em: {CLASSIFIED_COMMENTS_PATH}")
 
     # Etapa 3: armazenamento no ChromaDB
     print("\n=== Armazenando no ChromaDB ===")
