@@ -63,9 +63,15 @@ def load_and_score_comments(raw_path: str, classified_path: str) -> pd.DataFrame
         return df
 
     print(f"{classified_path} nao encontrado -- usando HeuristicScorer local (sem LLM).")
+
+    raw_file = Path(raw_path)
+    if not raw_file.exists():
+        print(f"{raw_path} nao encontrado -- nenhum comentario do YouTube para processar (plataforma sera pulada).")
+        return pd.DataFrame(columns=["comment_id", "author", "video_id", "published_at", "quality_score", "categorias"])
+
     print(f"Carregando {raw_path}...")
     t0 = time.time()
-    with open(raw_path, encoding="utf-8") as f:
+    with open(raw_file, encoding="utf-8") as f:
         raw = json.load(f)
     df = pd.DataFrame(raw)
     del raw
