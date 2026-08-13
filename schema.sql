@@ -1,12 +1,14 @@
 -- Schema do motor de decaimento de engajamento (energia psicologica).
--- SQLite. Indices otimizados para os dois padroes de acesso reais do sistema:
--- (1) leitura de eventos de UM autor ao longo do tempo (recalculo de energia)
--- e (2) leitura de TODOS os eventos de UM dia (job diario em lote).
+-- SQLite. Indices otimizados para os padroes de acesso reais do sistema:
+-- (1) leitura de eventos de UM autor ao longo do tempo (recalculo de energia),
+-- (2) leitura de TODOS os eventos de UM dia (job diario em lote), e
+-- (3) leitura de eventos de UMA plataforma (cutoff incremental por rede).
 
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS authors (
-    author_channel_id   TEXT PRIMARY KEY,
+    author_channel_id   TEXT PRIMARY KEY,  -- namespaced: "{platform}:{author_id}"
+    platform             TEXT NOT NULL,
     author_display_name TEXT NOT NULL DEFAULT '',
     first_seen_at        TEXT NOT NULL,  -- ISO 8601 UTC
     last_seen_at          TEXT NOT NULL   -- ISO 8601 UTC
@@ -14,9 +16,10 @@ CREATE TABLE IF NOT EXISTS authors (
 
 CREATE TABLE IF NOT EXISTS engagement_events (
     event_id           TEXT PRIMARY KEY,
-    comment_id          TEXT NOT NULL,
+    event_source_id     TEXT NOT NULL,  -- ID original na plataforma de origem (comment_id, hash de mensagem, etc.)
+    platform             TEXT NOT NULL,
     author_channel_id   TEXT NOT NULL REFERENCES authors(author_channel_id),
-    video_id            TEXT NOT NULL,
+    content_id            TEXT NOT NULL,  -- video_id, nome do grupo/chat, etc.
     published_at         TEXT NOT NULL,  -- ISO 8601 UTC
     quality_score         REAL NOT NULL CHECK (quality_score >= 0.0 AND quality_score <= 1.0),
     categorias            TEXT NOT NULL DEFAULT ''
@@ -34,8 +37,15 @@ CREATE INDEX IF NOT EXISTS idx_events_published_at
 CREATE INDEX IF NOT EXISTS idx_events_author_published
     ON engagement_events(author_channel_id, published_at);
 
-CREATE INDEX IF NOT EXISTS idx_events_video_id
-    ON engagement_events(video_id);
+CREATE INDEX IF NOT EXISTS idx_events_content_id
+    ON engagement_events(content_id);
+
+-- platform isolado: usado pelo cutoff incremental por-plataforma.
+CREATE INDEX IF NOT EXISTS idx_events_platform
+    ON engagement_events(platform);
+
+CREATE INDEX IF NOT EXISTS idx_events_platform_published
+    ON engagement_events(platform, published_at);
 
 -- Estado corrente (N0) de cada autor: um snapshot, nao um historico.
 -- O historico completo, quando necessario, e reconstruido reprocessando

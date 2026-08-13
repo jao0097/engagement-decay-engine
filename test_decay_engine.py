@@ -10,6 +10,21 @@ import pytest
 import decay_engine as de
 
 
+def test_schema_tem_colunas_de_plataforma(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = de.get_connection(str(db_path))
+    de.init_schema(conn)
+
+    colunas_authors = {row[1] for row in conn.execute("PRAGMA table_info(authors)").fetchall()}
+    colunas_events = {row[1] for row in conn.execute("PRAGMA table_info(engagement_events)").fetchall()}
+    conn.close()
+
+    assert "platform" in colunas_authors
+    assert {"platform", "content_id", "event_source_id"} <= colunas_events
+    assert "video_id" not in colunas_events
+    assert "comment_id" not in colunas_events
+
+
 # --------------------------------------------------------------------------
 # meia-vida e decaimento
 # --------------------------------------------------------------------------
