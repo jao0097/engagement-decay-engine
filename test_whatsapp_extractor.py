@@ -1,0 +1,69 @@
+"""Testes de whatsapp_extractor.py. Rodar com: pytest test_whatsapp_extractor.py -v"""
+
+from whatsapp_extractor import parse_whatsapp_export, is_system_message, make_event_id
+
+
+class TestParseWhatsappExport:
+    def test_mensagem_simples(self):
+        texto = "12/08/2026 22:10 - Joao Silva: oi pessoal, tudo bem?"
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 1
+        assert resultado[0]["author"] == "Joao Silva"
+        assert resultado[0]["text"] == "oi pessoal, tudo bem?"
+        assert resultado[0]["timestamp_raw"] == "12/08/2026 22:10"
+
+    def test_mensagem_multilinha_concatena_na_anterior(self):
+        texto = "12/08/2026 22:10 - Joao Silva: primeira linha\nsegunda linha sem prefixo"
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 1
+        assert resultado[0]["text"] == "primeira linha\nsegunda linha sem prefixo"
+
+    def test_duas_mensagens_distintas(self):
+        texto = (
+            "12/08/2026 22:10 - Joao Silva: primeira\n"
+            "12/08/2026 22:11 - Maria Souza: segunda"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 2
+        assert resultado[1]["author"] == "Maria Souza"
+
+    def test_mensagem_de_sistema_sem_dois_pontos_e_ignorada(self):
+        texto = (
+            "12/08/2026 22:00 - As mensagens e as ligacoes agora sao protegidas "
+            "com criptografia de ponta a ponta.\n"
+            "12/08/2026 22:10 - Joao Silva: oi"
+        )
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 1
+        assert resultado[0]["author"] == "Joao Silva"
+
+    def test_linha_vazia_ignorada(self):
+        texto = "12/08/2026 22:10 - Joao Silva: oi\n\n"
+        resultado = parse_whatsapp_export(texto)
+        assert len(resultado) == 1
+
+    def test_arquivo_vazio(self):
+        assert parse_whatsapp_export("") == []
+
+
+class TestIsSystemMessage:
+    def test_midia_oculta(self):
+        assert is_system_message("<Midia oculta>") is True
+
+    def test_figurinha(self):
+        assert is_system_message("figurinha omitida") is True
+
+    def test_mensagem_normal_nao_e_sistema(self):
+        assert is_system_message("gostei muito da explicacao, obrigado!") is False
+
+
+class TestMakeEventId:
+    def test_determinismo(self):
+        a = make_event_id("Joao", "2026-08-12T22:10:00+00:00", "oi")
+        b = make_event_id("Joao", "2026-08-12T22:10:00+00:00", "oi")
+        assert a == b
+
+    def test_inputs_diferentes_geram_ids_diferentes(self):
+        a = make_event_id("Joao", "2026-08-12T22:10:00+00:00", "oi")
+        b = make_event_id("Maria", "2026-08-12T22:10:00+00:00", "oi")
+        assert a != b
