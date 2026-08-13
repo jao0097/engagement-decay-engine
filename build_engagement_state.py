@@ -134,6 +134,22 @@ def get_events_cutoff(conn, platform: str) -> pd.Timestamp | None:
     return pd.Timestamp(row[0])
 
 
+def get_existing_event_ids(conn, platform: str, cutoff: pd.Timestamp) -> set:
+    """IDs de eventos ja persistidos para essa plataforma a partir do cutoff
+    (inclusive). Usado para deduplicar o corte incremental: como o cutoff e
+    o MAX(published_at) ja gravado, plataformas de resolucao grosseira
+    (ex.: WhatsApp, so minuto) podem ter mais de um evento no mesmo instante
+    do cutoff -- selecionar so '> cutoff' perderia pra sempre qualquer
+    mensagem nova que caia nesse mesmo minuto. Selecionando '>= cutoff' e
+    excluindo os event_id ja gravados (hash deterministico do conteudo)
+    resolve isso sem reaplicar energia de eventos ja processados."""
+    rows = conn.execute(
+        "SELECT event_id FROM engagement_events WHERE platform = ? AND published_at >= ?",
+        (platform, cutoff.isoformat()),
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
 def insert_events_in_chunks(conn, events: pd.DataFrame, chunk_size: int = INSERT_CHUNK_SIZE) -> None:
     print(f"Inserindo {len(events):,} eventos no SQLite em lotes de {chunk_size:,}...".replace(",", "."))
     t0 = time.time()
@@ -189,7 +205,10 @@ def process_platform(conn, platform: str, universal_events: pd.DataFrame,
     cutoff = get_events_cutoff(conn, platform) if banco_existente else None
     if cutoff is not None:
         antes = len(events)
-        events = events[pd.to_datetime(events["published_at"], utc=True) > cutoff]
+        events = events[pd.to_datetime(events["published_at"], utc=True) >= cutoff]
+        if not events.empty:
+            ja_gravados = get_existing_event_ids(conn, platform, cutoff)
+            events = events[~events["event_id"].isin(ja_gravados)]
         print(f"[{platform}] modo incremental: banco ja tem eventos ate {cutoff}. "
               f"{len(events)}/{antes} sao novos.")
         if events.empty:
