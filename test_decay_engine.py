@@ -10,6 +10,21 @@ import pytest
 import decay_engine as de
 
 
+def test_schema_tem_colunas_de_plataforma(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = de.get_connection(str(db_path))
+    de.init_schema(conn)
+
+    colunas_authors = {row[1] for row in conn.execute("PRAGMA table_info(authors)").fetchall()}
+    colunas_events = {row[1] for row in conn.execute("PRAGMA table_info(engagement_events)").fetchall()}
+    conn.close()
+
+    assert "platform" in colunas_authors
+    assert {"platform", "content_id", "event_source_id"} <= colunas_events
+    assert "video_id" not in colunas_events
+    assert "comment_id" not in colunas_events
+
+
 # --------------------------------------------------------------------------
 # meia-vida e decaimento
 # --------------------------------------------------------------------------
@@ -217,8 +232,9 @@ def test_persistencia_sqlite_round_trip(tmp_path):
     eventos = _eventos_dois_autores().copy()
     eventos["author_display_name"] = eventos["author_channel_id"]
     eventos["event_id"] = [f"e{i}" for i in range(len(eventos))]
-    eventos["comment_id"] = eventos["event_id"]
-    eventos["video_id"] = "v1"
+    eventos["event_source_id"] = eventos["event_id"]
+    eventos["platform"] = "youtube"
+    eventos["content_id"] = "v1"
     eventos["categorias"] = ""
     de.insert_events(conn, eventos)
 
@@ -230,3 +246,60 @@ def test_persistencia_sqlite_round_trip(tmp_path):
 
     assert recarregado.loc["A", "energy"] == pytest.approx(state.loc["A", "energy"])
     assert recarregado.loc["A", "level"] == state.loc["A", "level"]
+
+
+def test_insert_events_persiste_platform(tmp_path):
+    db_path = tmp_path / "test.db"
+    conn = de.get_connection(str(db_path))
+    de.init_schema(conn)
+
+    eventos = _eventos_dois_autores().copy()
+    eventos["author_display_name"] = eventos["author_channel_id"]
+    eventos["event_id"] = [f"e{i}" for i in range(len(eventos))]
+    eventos["event_source_id"] = eventos["event_id"]
+    eventos["platform"] = "whatsapp"
+    eventos["content_id"] = "Grupo Teste"
+    eventos["categorias"] = ""
+    de.insert_events(conn, eventos)
+
+    linhas = conn.execute("SELECT DISTINCT platform FROM engagement_events").fetchall()
+    conn.close()
+
+    assert linhas == [("whatsapp",)]
+
+
+# --------------------------------------------------------------------------
+# cross-platform (namespacing de author_channel_id)
+# --------------------------------------------------------------------------
+
+def test_duas_plataformas_com_mesmo_author_id_nao_colidem():
+    eventos_youtube = pd.DataFrame(
+        [{"author_channel_id": "youtube:joao", "published_at": "2026-01-01T10:00:00Z", "quality_score": 1.0}]
+    )
+    eventos_whatsapp = pd.DataFrame(
+        [{"author_channel_id": "whatsapp:joao", "published_at": "2026-01-01T10:00:00Z", "quality_score": 1.0}]
+    )
+
+    estado_youtube, _ = de.backfill_history(eventos_youtube, base_weight=20.0)
+    estado_whatsapp, _ = de.backfill_history(eventos_whatsapp, base_weight=5.0)
+
+    estado_final = pd.concat([estado_youtube, estado_whatsapp])
+
+    assert set(estado_final.index) == {"youtube:joao", "whatsapp:joao"}
+    assert estado_final.loc["youtube:joao", "energy"] != estado_final.loc["whatsapp:joao", "energy"]
+
+
+def test_churn_risk_report_funciona_com_autores_de_plataformas_diferentes():
+    agora = pd.Timestamp.now(tz="UTC")
+    estado = pd.DataFrame(
+        {
+            "energy": [65.0, 65.0],
+            "level": [4, 4],
+            "last_update_at": [agora, agora],
+            "last_event_at": [agora, agora],
+            "updated_at": [agora, agora],
+        },
+        index=pd.Index(["youtube:joao", "whatsapp:joao"], name="author_channel_id"),
+    )
+    risco = de.churn_risk_report(estado, buffer=50.0)
+    assert set(risco.index) == {"youtube:joao", "whatsapp:joao"}

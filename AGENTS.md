@@ -20,7 +20,14 @@
 Subsistema separado do pipeline de extração/classificação acima: identifica
 autores em risco de evasão via decaimento físico de uma "energia" por autor,
 com 5 níveis psicológicos (L1-L5) e transições com histerese (banda de 3
-pontos na queda de nível, pra não oscilar por ruído).
+pontos na queda de nível, pra não oscilar por ruído). Ingestão é
+plataforma-agnóstica: qualquer rede alimenta o motor através de um schema
+universal de evento (`event_id, platform, author_id, author_display_name,
+content_id, published_at, quality_score, categorias`), traduzido para o
+formato interno via `author_channel_id = "{platform}:{author_id}"` (evita
+colisão entre plataformas sem exigir chave composta). Hoje: YouTube
+(comentários, via `main.py`) e WhatsApp (export manual de chat `.txt`, via
+`whatsapp_extractor.py`).
 
 - **Arquivos**: `schema.sql` (tabelas `authors`/`engagement_events`/
   `author_engagement_state`), `decay_engine.py` (matemática de decaimento,
@@ -30,11 +37,25 @@ pontos na queda de nível, pra não oscilar por ruído).
   Streamlit). Testes em `test_decay_engine.py` e `test_scoring_engine.py`
   (47 casos, `pytest test_scoring_engine.py test_decay_engine.py -v`).
 
+- **Adaptador WhatsApp**: `whatsapp_extractor.py` lê um export manual do
+  WhatsApp (`Exportar conversa` no menu do grupo, formato Android
+  `DD/MM/AAAA HH:MM - Autor: mensagem`), filtra mensagens de sistema
+  (criptografia, mídia oculta, entrada/saída de membro) e pontua cada
+  mensagem com `HeuristicScorer` (sem custo de LLM). Roda separado:
+  `python whatsapp_extractor.py --input data/whatsapp_bruto_<grupo>.txt
+  --grupo "Nome do Grupo"`, gera `data/whatsapp_eventos.json`, que
+  `build_engagement_state.py` lê automaticamente se existir. Testes em
+  `test_whatsapp_extractor.py`.
+
 - **Como rodar**: `python build_engagement_state.py` popula/atualiza
-  `engagement.db` (incremental por padrão — só processa comentários mais
-  novos que o último já gravado; `--rebuild` força reprocessar tudo).
-  `streamlit run app.py` abre o dashboard (usa `engagement.db` se existir,
-  senão gera dados sintéticos na hora).
+  `engagement.db`, processando cada plataforma presente em `./data/`
+  separadamente (cutoff incremental e `base_weight` independentes por
+  plataforma — `--base-weight-youtube`/`--base-weight-whatsapp`, default 20
+  pros dois). `--rebuild` força reprocessar tudo. **Mudança de schema**: bancos
+  `engagement.db` criados antes desta versão não têm a coluna `platform` —
+  rode com `--rebuild` uma vez após atualizar. `streamlit run app.py` abre o
+  dashboard (usa `engagement.db` se existir, senão gera dados sintéticos na
+  hora).
 
 - **Scoring sem gastar LLM**: `CategoryWeightedScorer` reaproveita a
   classificação Groq já feita (`data/comentarios_classificados.json`) sem
