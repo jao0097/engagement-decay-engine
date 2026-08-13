@@ -54,8 +54,12 @@ def _load_checkpoint_comments() -> list[dict]:
     with open(CHECKPOINT_PATH, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if line:
+            if not line:
+                continue
+            try:
                 comments.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                print(f"  [aviso] linha de checkpoint corrompida, ignorando: {e}")
     return comments
 
 
@@ -73,6 +77,16 @@ def _get_error_reason(e: HttpError) -> str:
     return ""
 
 
+def _safe_error_str(e: HttpError) -> str:
+    """
+    Representacao segura do erro para logs, sem a URI/query string da request
+    (que inclui a API key via developerKey=...). Nunca formatar o HttpError cru.
+    """
+    reason = _get_error_reason(e)
+    status = getattr(e, "status_code", None) or getattr(getattr(e, "resp", None), "status", "?")
+    return f"HTTP {status}" + (f" ({reason})" if reason else "")
+
+
 def _execute_with_retry(request, max_retries: int = 3):
     """
     Executa uma request da API do YouTube com retry curto em erros transitorios.
@@ -88,7 +102,7 @@ def _execute_with_retry(request, max_retries: int = 3):
             if attempt == max_retries - 1:
                 raise
             wait = 2 ** attempt
-            print(f"  [retry] erro transitorio ({reason or e}), tentativa {attempt + 1}/{max_retries}, aguardando {wait}s...")
+            print(f"  [retry] erro transitorio ({_safe_error_str(e)}), tentativa {attempt + 1}/{max_retries}, aguardando {wait}s...")
             time.sleep(wait)
 
 
@@ -159,7 +173,7 @@ def get_comments_for_video(youtube, video_id: str) -> list[dict]:
                 return []
             if reason == "quotaExceeded":
                 raise
-            print(f"  [aviso] erro ao buscar comentarios do video {video_id} apos retries: {e}")
+            print(f"  [aviso] erro ao buscar comentarios do video {video_id} apos retries: {_safe_error_str(e)}")
             return comments
 
         for thread in response.get("items", []):

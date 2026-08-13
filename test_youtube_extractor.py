@@ -19,12 +19,12 @@ class FakeResp:
         self.reason = ""
 
 
-def make_http_error(status: int, body: dict) -> HttpError:
+def make_http_error(status: int, body: dict, uri: str | None = None) -> HttpError:
     # Ensure error object has a "message" field for proper HttpError parsing
     if "error" in body and "message" not in body["error"]:
         body["error"]["message"] = ""
     content = json.dumps(body).encode("utf-8")
-    return HttpError(FakeResp(status), content)
+    return HttpError(FakeResp(status), content, uri=uri)
 
 
 # --------------------------------------------------------------------------
@@ -279,3 +279,66 @@ def test_load_progress_arquivo_corrompido_retorna_vazio(tmp_path, monkeypatch):
         f.write("{isso nao e json valido")
 
     assert ye._load_progress() == set()
+
+
+def test_load_checkpoint_comments_linha_final_corrompida_retorna_validas(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ye, "CHECKPOINT_PATH", str(tmp_path / "checkpoint.jsonl"))
+    with open(ye.CHECKPOINT_PATH, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"comment_id": "c1"}) + "\n")
+        f.write(json.dumps({"comment_id": "c2"}) + "\n")
+        # linha final truncada, simulando crash no meio do write
+        f.write('{"comment_id": "c3", "text": "trunc')
+
+    comments = ye._load_checkpoint_comments()
+
+    assert comments == [{"comment_id": "c1"}, {"comment_id": "c2"}]
+    captured = capsys.readouterr()
+    assert "aviso" in captured.out
+
+
+# --------------------------------------------------------------------------
+# _safe_error_str: nao vazar API key (query string da uri) nos logs
+# --------------------------------------------------------------------------
+
+def test_safe_error_str_nao_contem_uri():
+    e = make_http_error(
+        500,
+        {"error": {"code": 500, "message": "Backend Error"}},
+        uri="https://www.googleapis.com/youtube/v3/commentThreads?key=FAKE_SECRET_KEY_12345",
+    )
+    result = ye._safe_error_str(e)
+    assert "FAKE_SECRET_KEY_12345" not in result
+    assert "HTTP 500" in result
+
+
+def test_execute_with_retry_nao_vaza_api_key_no_stdout(monkeypatch, capsys):
+    monkeypatch.setattr(ye.time, "sleep", lambda s: None)
+    transient = make_http_error(
+        500,
+        {"error": {"code": 500, "message": "Backend Error"}},
+        uri="https://www.googleapis.com/youtube/v3/commentThreads?key=FAKE_SECRET_KEY_12345",
+    )
+    request = MagicMock()
+    request.execute.side_effect = [transient, {"ok": True}]
+
+    ye._execute_with_retry(request, max_retries=3)
+
+    captured = capsys.readouterr()
+    assert "FAKE_SECRET_KEY_12345" not in captured.out
+
+
+def test_get_comments_for_video_nao_vaza_api_key_no_stdout(monkeypatch, capsys):
+    monkeypatch.setattr(ye.time, "sleep", lambda s: None)
+    transient = make_http_error(
+        500,
+        {"error": {"code": 500, "message": "Backend Error"}},
+        uri="https://www.googleapis.com/youtube/v3/commentThreads?key=FAKE_SECRET_KEY_12345",
+    )
+    youtube = MagicMock()
+    youtube.commentThreads.return_value.list.return_value.execute.side_effect = [transient, transient, transient]
+
+    result = ye.get_comments_for_video(youtube, "v1")
+
+    assert result == []
+    captured = capsys.readouterr()
+    assert "FAKE_SECRET_KEY_12345" not in captured.out
