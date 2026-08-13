@@ -106,6 +106,18 @@ def youtube_to_universal_events(df: pd.DataFrame) -> pd.DataFrame:
     return events
 
 
+def to_decay_engine_events(universal_events: pd.DataFrame) -> pd.DataFrame:
+    """Traduz o schema universal (author_id + platform) para o formato interno
+    do decay_engine. Namespacia author_channel_id = "{platform}:{author_id}"
+    para evitar colisao entre plataformas sem precisar de chave composta em
+    pandas -- decay_engine.py continua so enxergando um author_channel_id
+    string, sem saber que carrega a plataforma embutida."""
+    events = universal_events.copy()
+    events["author_channel_id"] = events["platform"] + ":" + events["author_id"].astype(str)
+    events["event_source_id"] = events["event_id"]
+    return events
+
+
 def get_events_cutoff(conn, platform: str) -> pd.Timestamp | None:
     """Timestamp do evento mais recente ja gravado para essa plataforma, ou None se vazio."""
     row = conn.execute(

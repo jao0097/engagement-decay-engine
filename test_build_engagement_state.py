@@ -3,7 +3,7 @@
 import pandas as pd
 
 import decay_engine as de
-from build_engagement_state import get_events_cutoff, youtube_to_universal_events
+from build_engagement_state import get_events_cutoff, youtube_to_universal_events, to_decay_engine_events
 
 
 def _eventos_duas_plataformas():
@@ -84,3 +84,30 @@ class TestGetEventsCutoff:
         resultado = get_events_cutoff(conn, "youtube")
         conn.close()
         assert resultado is None
+
+
+def _evento_universal(**overrides):
+    base = {
+        "event_id": "e1", "platform": "youtube", "author_id": "joao",
+        "author_display_name": "joao", "content_id": "v1",
+        "published_at": "2026-08-01T10:00:00+00:00", "quality_score": 0.5, "categorias": "",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestToDecayEngineEvents:
+    def test_namespacing_evita_colisao_entre_plataformas(self):
+        universal = pd.DataFrame(
+            [
+                _evento_universal(event_id="e1", platform="youtube"),
+                _evento_universal(event_id="e2", platform="whatsapp", content_id="Grupo X"),
+            ]
+        )
+        resultado = to_decay_engine_events(universal)
+        assert set(resultado["author_channel_id"]) == {"youtube:joao", "whatsapp:joao"}
+
+    def test_event_source_id_copia_event_id(self):
+        universal = pd.DataFrame([_evento_universal(event_id="e1")])
+        resultado = to_decay_engine_events(universal)
+        assert resultado.iloc[0]["event_source_id"] == "e1"
