@@ -13,15 +13,21 @@ DB_PATH = "./chroma_db"
 # Embedding multilingue - roda localmente, sem custo e sem API externa
 EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
+# Singleton para cachear o embedding model e evitar recarregar a cada chamada
+_collection = None
+
 
 def get_collection():
-    client = chromadb.PersistentClient(path=DB_PATH)
-    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
-    )
-    return client.get_or_create_collection(
-        name=COLLECTION_NAME, embedding_function=embedding_fn
-    )
+    global _collection
+    if _collection is None:
+        client = chromadb.PersistentClient(path=DB_PATH)
+        embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=EMBEDDING_MODEL
+        )
+        _collection = client.get_or_create_collection(
+            name=COLLECTION_NAME, embedding_function=embedding_fn
+        )
+    return _collection
 
 
 def store_comments(comments: list[dict]) -> None:
