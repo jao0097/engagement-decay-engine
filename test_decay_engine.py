@@ -266,3 +266,40 @@ def test_insert_events_persiste_platform(tmp_path):
     conn.close()
 
     assert linhas == [("whatsapp",)]
+
+
+# --------------------------------------------------------------------------
+# cross-platform (namespacing de author_channel_id)
+# --------------------------------------------------------------------------
+
+def test_duas_plataformas_com_mesmo_author_id_nao_colidem():
+    eventos_youtube = pd.DataFrame(
+        [{"author_channel_id": "youtube:joao", "published_at": "2026-01-01T10:00:00Z", "quality_score": 1.0}]
+    )
+    eventos_whatsapp = pd.DataFrame(
+        [{"author_channel_id": "whatsapp:joao", "published_at": "2026-01-01T10:00:00Z", "quality_score": 1.0}]
+    )
+
+    estado_youtube, _ = de.backfill_history(eventos_youtube, base_weight=20.0)
+    estado_whatsapp, _ = de.backfill_history(eventos_whatsapp, base_weight=5.0)
+
+    estado_final = pd.concat([estado_youtube, estado_whatsapp])
+
+    assert set(estado_final.index) == {"youtube:joao", "whatsapp:joao"}
+    assert estado_final.loc["youtube:joao", "energy"] != estado_final.loc["whatsapp:joao", "energy"]
+
+
+def test_churn_risk_report_funciona_com_autores_de_plataformas_diferentes():
+    agora = pd.Timestamp.now(tz="UTC")
+    estado = pd.DataFrame(
+        {
+            "energy": [65.0, 65.0],
+            "level": [4, 4],
+            "last_update_at": [agora, agora],
+            "last_event_at": [agora, agora],
+            "updated_at": [agora, agora],
+        },
+        index=pd.Index(["youtube:joao", "whatsapp:joao"], name="author_channel_id"),
+    )
+    risco = de.churn_risk_report(estado, buffer=50.0)
+    assert set(risco.index) == {"youtube:joao", "whatsapp:joao"}
