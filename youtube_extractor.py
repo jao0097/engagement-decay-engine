@@ -17,6 +17,47 @@ from googleapiclient.errors import HttpError
 YOUTUBE_API_SERVICE_NAME = "youtube"
 YOUTUBE_API_VERSION = "v3"
 
+CHECKPOINT_PATH = "./data/comentarios_brutos.checkpoint.jsonl"
+PROGRESS_PATH = "./data/comentarios_brutos.progress.json"
+
+
+def _load_progress() -> set[str]:
+    if not os.path.exists(PROGRESS_PATH):
+        return set()
+    with open(PROGRESS_PATH, encoding="utf-8") as f:
+        return set(json.load(f))
+
+
+def _save_progress(done_video_ids: set[str]) -> None:
+    os.makedirs(os.path.dirname(PROGRESS_PATH), exist_ok=True)
+    with open(PROGRESS_PATH, "w", encoding="utf-8") as f:
+        json.dump(sorted(done_video_ids), f)
+
+
+def _append_checkpoint(video_comments: list[dict]) -> None:
+    os.makedirs(os.path.dirname(CHECKPOINT_PATH), exist_ok=True)
+    with open(CHECKPOINT_PATH, "a", encoding="utf-8") as f:
+        for c in video_comments:
+            f.write(json.dumps(c, ensure_ascii=False) + "\n")
+
+
+def _load_checkpoint_comments() -> list[dict]:
+    if not os.path.exists(CHECKPOINT_PATH):
+        return []
+    comments = []
+    with open(CHECKPOINT_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                comments.append(json.loads(line))
+    return comments
+
+
+def _clear_checkpoint() -> None:
+    for path in (CHECKPOINT_PATH, PROGRESS_PATH):
+        if os.path.exists(path):
+            os.remove(path)
+
 
 def _get_error_reason(e: HttpError) -> str:
     """Extrai o 'reason' do erro da API, tratando error_details como lista OU string."""
@@ -51,7 +92,7 @@ def get_youtube_client(api_key: str):
 
 def get_uploads_playlist_id(youtube, channel_id: str) -> str:
     """Pega o ID da playlist 'uploads' do canal (todos os videos publicados)."""
-    response = youtube.channels().list(part="contentDetails", id=channel_id).execute()
+    response = _execute_with_retry(youtube.channels().list(part="contentDetails", id=channel_id))
     items = response.get("items", [])
     if not items:
         raise ValueError(f"Canal nao encontrado: {channel_id}")
@@ -64,15 +105,13 @@ def get_all_video_ids(youtube, playlist_id: str) -> list[dict]:
     page_token = None
 
     while True:
-        response = (
-            youtube.playlistItems()
-            .list(
+        response = _execute_with_retry(
+            youtube.playlistItems().list(
                 part="contentDetails,snippet",
                 playlistId=playlist_id,
                 maxResults=50,
                 pageToken=page_token,
             )
-            .execute()
         )
         for item in response.get("items", []):
             videos.append(
@@ -99,27 +138,22 @@ def get_comments_for_video(youtube, video_id: str) -> list[dict]:
 
     while True:
         try:
-            response = (
-                youtube.commentThreads()
-                .list(
+            response = _execute_with_retry(
+                youtube.commentThreads().list(
                     part="snippet,replies",
                     videoId=video_id,
                     maxResults=100,
                     pageToken=page_token,
                     textFormat="plainText",
                 )
-                .execute()
             )
         except HttpError as e:
-            reason = ""
-            if e.error_details:
-                reason = e.error_details[0].get("reason", "")
+            reason = _get_error_reason(e)
             if reason == "commentsDisabled":
                 return []
             if reason == "quotaExceeded":
                 raise
-            # erro inesperado: loga e para esse video, mas nao quebra o resto da coleta
-            print(f"  [aviso] erro ao buscar comentarios do video {video_id}: {e}")
+            print(f"  [aviso] erro ao buscar comentarios do video {video_id} apos retries: {e}")
             return comments
 
         for thread in response.get("items", []):
@@ -168,18 +202,29 @@ def extract_channel_comments(api_key: str, channel_id: str, output_path: str) ->
     videos = get_all_video_ids(youtube, playlist_id)
     print(f"  {len(videos)} videos encontrados.")
 
-    all_comments = []
+    done_video_ids = _load_progress()
+    all_comments = _load_checkpoint_comments()
+    if done_video_ids:
+        print(f"Checkpoint encontrado: {len(done_video_ids)} videos ja processados, retomando.")
+
     for i, video in enumerate(videos, start=1):
+        if video["video_id"] in done_video_ids:
+            continue
         print(f"[{i}/{len(videos)}] Extraindo comentarios de: {video['title'][:60]}")
         video_comments = get_comments_for_video(youtube, video["video_id"])
         for c in video_comments:
             c["video_title"] = video["title"]
+        _append_checkpoint(video_comments)
         all_comments.extend(video_comments)
+        done_video_ids.add(video["video_id"])
+        _save_progress(done_video_ids)
         time.sleep(0.05)  # pequena folga para nao martelar a API
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(all_comments, f, ensure_ascii=False, indent=2)
+
+    _clear_checkpoint()
 
     print(f"\nTotal de comentarios extraidos: {len(all_comments)}")
     print(f"Salvo em: {output_path}")
