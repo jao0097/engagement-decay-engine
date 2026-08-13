@@ -80,7 +80,10 @@ def load_and_score_comments(raw_path: str, classified_path: str) -> pd.DataFrame
     return df
 
 
-def build_events_frame(df: pd.DataFrame) -> pd.DataFrame:
+def youtube_to_universal_events(df: pd.DataFrame) -> pd.DataFrame:
+    """Converte comentarios do YouTube (ja com quality_score) para o schema
+    universal de eventos (mesmo contrato que qualquer outro adaptador de
+    plataforma deve produzir)."""
     if "categorias" in df.columns:
         categorias = df["categorias"].apply(lambda c: ",".join(c) if isinstance(c, list) else (c or ""))
     else:
@@ -89,16 +92,16 @@ def build_events_frame(df: pd.DataFrame) -> pd.DataFrame:
     events = pd.DataFrame(
         {
             "event_id": df["comment_id"],
-            "comment_id": df["comment_id"],
-            "author_channel_id": df["author"],
+            "platform": "youtube",
+            "author_id": df["author"],
             "author_display_name": df["author"],
-            "video_id": df["video_id"],
+            "content_id": df["video_id"],
             "published_at": df["published_at"],
             "quality_score": df["quality_score"],
             "categorias": categorias,
         }
     )
-    # comentarios duplicados/reextraidos (mesmo comment_id) so entram uma vez.
+    # comentarios duplicados/reextraidos (mesmo event_id) so entram uma vez.
     events = events.drop_duplicates("event_id")
     return events
 
