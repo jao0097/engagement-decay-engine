@@ -151,12 +151,75 @@ def instant_level_distribution(events: pd.DataFrame) -> pd.Series:
     return pd.Series(niveis).value_counts().sort_index()
 
 
+WHATSAPP_EVENTS_PATH = "./data/whatsapp_eventos.json"
+
+PLATFORM_BASE_WEIGHTS_DEFAULT = {"youtube": decay_engine.DEFAULT_BASE_WEIGHT, "whatsapp": decay_engine.DEFAULT_BASE_WEIGHT}
+
+
+def load_whatsapp_events(path: str) -> pd.DataFrame:
+    events_file = Path(path)
+    columns = ["event_id", "platform", "author_id", "author_display_name",
+               "content_id", "published_at", "quality_score", "categorias"]
+    if not events_file.exists():
+        return pd.DataFrame(columns=columns)
+    with open(events_file, encoding="utf-8") as f:
+        raw = json.load(f)
+    if not raw:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(raw)
+
+
+def process_platform(conn, platform: str, universal_events: pd.DataFrame,
+                      base_weight: float, banco_existente: bool) -> None:
+    """Processa os eventos de UMA plataforma: cutoff incremental proprio,
+    insercao no SQLite e replay do motor de decaimento com o estado
+    (filtrado por plataforma) que ja existia."""
+    if universal_events.empty:
+        print(f"[{platform}] nenhum evento encontrado, pulando.")
+        return
+
+    events = to_decay_engine_events(universal_events)
+
+    cutoff = get_events_cutoff(conn, platform) if banco_existente else None
+    if cutoff is not None:
+        antes = len(events)
+        events = events[pd.to_datetime(events["published_at"], utc=True) > cutoff]
+        print(f"[{platform}] modo incremental: banco ja tem eventos ate {cutoff}. "
+              f"{len(events)}/{antes} sao novos.")
+        if events.empty:
+            print(f"[{platform}] nada novo para processar.")
+            return
+    else:
+        print(f"[{platform}] modo completo: processando {len(events)} eventos do zero.")
+
+    estado_completo = decay_engine.load_state(conn) if banco_existente else pd.DataFrame()
+    if not estado_completo.empty:
+        estado_plataforma = estado_completo[estado_completo.index.str.startswith(f"{platform}:")]
+    else:
+        estado_plataforma = estado_completo
+
+    print(f"[{platform}] distribuicao de nivel instantaneo por evento:")
+    for nivel, contagem in instant_level_distribution(events).items():
+        print(f"  L{nivel}: {contagem} eventos")
+
+    insert_events_in_chunks(conn, events)
+
+    state, _ = decay_engine.backfill_history(
+        events, base_weight=base_weight, keep_history=False,
+        initial_state=estado_plataforma if not estado_plataforma.empty else None,
+    )
+    decay_engine.save_state(conn, state)
+    print(f"[{platform}] {len(state)} autores atualizados.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-weight", type=float, default=decay_engine.DEFAULT_BASE_WEIGHT)
+    parser.add_argument("--base-weight-youtube", type=float, default=PLATFORM_BASE_WEIGHTS_DEFAULT["youtube"])
+    parser.add_argument("--base-weight-whatsapp", type=float, default=PLATFORM_BASE_WEIGHTS_DEFAULT["whatsapp"])
     parser.add_argument("--db", type=str, default=decay_engine.DB_PATH)
     parser.add_argument("--raw", type=str, default=RAW_COMMENTS_PATH)
     parser.add_argument("--classified", type=str, default=CLASSIFIED_COMMENTS_PATH)
+    parser.add_argument("--whatsapp-events", type=str, default=WHATSAPP_EVENTS_PATH)
     parser.add_argument(
         "--rebuild", action="store_true",
         help="Forca reconstrucao completa do banco, mesmo se ele ja existir com dados.",
@@ -165,13 +228,8 @@ def main() -> None:
 
     t_inicio = time.time()
 
-    df = load_and_score_comments(args.raw, args.classified)
-    events = build_events_frame(df)
-    del df  # libera o dataframe bruto (com o texto completo) antes do backfill
-
     db_path = Path(args.db)
     banco_existente = db_path.exists()
-
     if banco_existente and args.rebuild:
         db_path.unlink()
         print(f"\n--rebuild: banco anterior {db_path} removido para reconstrucao completa.")
@@ -180,50 +238,18 @@ def main() -> None:
     conn = decay_engine.get_connection(str(db_path))
     decay_engine.init_schema(conn)
 
-    cutoff = get_events_cutoff(conn) if banco_existente else None
-    estado_existente = decay_engine.load_state(conn) if banco_existente else None
-    modo_incremental = cutoff is not None and estado_existente is not None and not estado_existente.empty
+    df_youtube = load_and_score_comments(args.raw, args.classified)
+    eventos_youtube = youtube_to_universal_events(df_youtube)
+    del df_youtube
 
-    if modo_incremental:
-        antes = len(events)
-        events = events[pd.to_datetime(events["published_at"], utc=True) > cutoff]
-        print(
-            f"\nModo incremental: banco ja tem eventos ate {cutoff}. "
-            f"{len(events):,}/{antes:,} comentarios sao novos.".replace(",", ".")
-        )
-        if events.empty:
-            print("Nada novo para processar. Banco ja esta atualizado.")
-            conn.close()
-            print(f"\nTotal: {time.time() - t_inicio:.1f}s.")
-            return
-    else:
-        print(f"\nModo completo: processando os {len(events):,} comentarios do zero.".replace(",", "."))
+    eventos_whatsapp = load_whatsapp_events(args.whatsapp_events)
 
-    print("\n=== Distribuicao de nivel INSTANTANEO por comentario (score isolado) ===")
-    for nivel, contagem in instant_level_distribution(events).items():
-        print(f"  L{nivel}: {contagem:,} comentarios".replace(",", "."))
+    base_weights = {"youtube": args.base_weight_youtube, "whatsapp": args.base_weight_whatsapp}
+    for platform, universal_events in (("youtube", eventos_youtube), ("whatsapp", eventos_whatsapp)):
+        print(f"\n=== Processando plataforma: {platform} ===")
+        process_platform(conn, platform, universal_events, base_weights[platform], banco_existente)
 
-    insert_events_in_chunks(conn, events)
-
-    print("\nExecutando motor de decaimento (replay dia a dia dos eventos novos)...")
-    t0 = time.time()
-    state, _ = decay_engine.backfill_history(
-        events, base_weight=args.base_weight, keep_history=False, initial_state=estado_existente
-    )
-    print(f"  {len(state):,} autores atualizados em {time.time() - t0:.1f}s".replace(",", "."))
-
-    decay_engine.save_state(conn, state)
     conn.close()
-
-    print("\n=== Distribuicao final de autores por NIVEL DE ENGAJAMENTO (energia com decaimento) ===")
-    labels = {1: "L1 - Novato", 2: "L2 - Casual", 3: "L3 - Engajado", 4: "L4 - Fa", 5: "L5 - Super-fa"}
-    for nivel, contagem in state["level"].value_counts().sort_index().items():
-        pct = 100 * contagem / len(state)
-        print(f"  {labels[nivel]:16s} {contagem:>7,} autores ({pct:5.1f}%)".replace(",", "."))
-
-    risco = decay_engine.churn_risk_report(state, buffer=10.0)
-    print(f"\nSuper-fas (L4/L5) em risco iminente de evasao: {len(risco):,}".replace(",", "."))
-
     print(f"\nTotal: {time.time() - t_inicio:.1f}s. Banco salvo em {db_path}.")
     print("Rode 'streamlit run app.py' para explorar visualmente.")
 

@@ -3,7 +3,12 @@
 import pandas as pd
 
 import decay_engine as de
-from build_engagement_state import get_events_cutoff, youtube_to_universal_events, to_decay_engine_events
+from build_engagement_state import (
+    get_events_cutoff,
+    process_platform,
+    to_decay_engine_events,
+    youtube_to_universal_events,
+)
 
 
 def _eventos_duas_plataformas():
@@ -111,3 +116,61 @@ class TestToDecayEngineEvents:
         universal = pd.DataFrame([_evento_universal(event_id="e1")])
         resultado = to_decay_engine_events(universal)
         assert resultado.iloc[0]["event_source_id"] == "e1"
+
+
+class TestProcessPlatform:
+    def test_grava_eventos_e_estado_para_uma_plataforma(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        conn = de.get_connection(str(db_path))
+        de.init_schema(conn)
+
+        universal = pd.DataFrame(
+            [
+                _evento_universal_wa(author_id="joao", published_at="2026-08-01T10:00:00+00:00"),
+                _evento_universal_wa(author_id="joao", published_at="2026-08-02T10:00:00+00:00", event_id="e2"),
+            ]
+        )
+        process_platform(conn, "whatsapp", universal, base_weight=20.0, banco_existente=False)
+
+        estado = de.load_state(conn)
+        eventos_gravados = conn.execute("SELECT COUNT(*) FROM engagement_events").fetchone()[0]
+        conn.close()
+
+        assert "whatsapp:joao" in estado.index
+        assert eventos_gravados == 2
+
+    def test_plataforma_sem_eventos_nao_quebra(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        conn = de.get_connection(str(db_path))
+        de.init_schema(conn)
+
+        vazio = pd.DataFrame(columns=[
+            "event_id", "platform", "author_id", "author_display_name",
+            "content_id", "published_at", "quality_score", "categorias",
+        ])
+        process_platform(conn, "whatsapp", vazio, base_weight=20.0, banco_existente=False)
+        conn.close()  # nao deve levantar excecao
+
+    def test_segunda_plataforma_nao_apaga_estado_da_primeira(self, tmp_path):
+        db_path = tmp_path / "test.db"
+        conn = de.get_connection(str(db_path))
+        de.init_schema(conn)
+
+        yt = pd.DataFrame([_evento_universal(event_id="y1", platform="youtube", author_id="ana")])
+        wa = pd.DataFrame([_evento_universal_wa(author_id="joao")])
+
+        process_platform(conn, "youtube", yt, base_weight=20.0, banco_existente=False)
+        process_platform(conn, "whatsapp", wa, base_weight=20.0, banco_existente=True)
+
+        estado = de.load_state(conn)
+        conn.close()
+
+        assert "youtube:ana" in estado.index
+        assert "whatsapp:joao" in estado.index
+
+
+def _evento_universal_wa(author_id="joao", published_at="2026-08-01T10:00:00+00:00", event_id="e1"):
+    return _evento_universal(
+        event_id=event_id, platform="whatsapp", author_id=author_id,
+        content_id="Grupo X", published_at=published_at,
+    )
