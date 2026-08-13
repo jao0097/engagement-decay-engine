@@ -24,14 +24,20 @@ PROGRESS_PATH = "./data/comentarios_brutos.progress.json"
 def _load_progress() -> set[str]:
     if not os.path.exists(PROGRESS_PATH):
         return set()
-    with open(PROGRESS_PATH, encoding="utf-8") as f:
-        return set(json.load(f))
+    try:
+        with open(PROGRESS_PATH, encoding="utf-8") as f:
+            return set(json.load(f))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  [aviso] progresso corrompido, ignorando: {e}")
+        return set()
 
 
 def _save_progress(done_video_ids: set[str]) -> None:
     os.makedirs(os.path.dirname(PROGRESS_PATH), exist_ok=True)
-    with open(PROGRESS_PATH, "w", encoding="utf-8") as f:
+    tmp_path = PROGRESS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(sorted(done_video_ids), f)
+    os.replace(tmp_path, PROGRESS_PATH)
 
 
 def _append_checkpoint(video_comments: list[dict]) -> None:
@@ -204,6 +210,8 @@ def extract_channel_comments(api_key: str, channel_id: str, output_path: str) ->
 
     done_video_ids = _load_progress()
     all_comments = _load_checkpoint_comments()
+    if all_comments:
+        done_video_ids |= {c["video_id"] for c in all_comments}
     if done_video_ids:
         print(f"Checkpoint encontrado: {len(done_video_ids)} videos ja processados, retomando.")
 

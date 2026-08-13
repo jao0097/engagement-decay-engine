@@ -233,3 +233,49 @@ def test_extract_channel_comments_resume_pula_videos_ja_processados(tmp_path, mo
     with open(output_path, encoding="utf-8") as f:
         saved = json.load(f)
     assert {c["comment_id"] for c in saved} == {"c1", "c2"}
+
+
+def test_extract_channel_comments_resume_apos_crash_entre_checkpoint_e_progress_nao_duplica(tmp_path, monkeypatch):
+    monkeypatch.setattr(ye, "CHECKPOINT_PATH", str(tmp_path / "checkpoint.jsonl"))
+    monkeypatch.setattr(ye, "PROGRESS_PATH", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(ye.time, "sleep", lambda s: None)
+
+    # simula crash entre _append_checkpoint e _save_progress: v1 ja esta no checkpoint,
+    # mas progress.json nunca foi escrito (nao existe).
+    ye._append_checkpoint([{"comment_id": "c1", "video_id": "v1", "video_title": "T1"}])
+    assert not os.path.exists(ye.PROGRESS_PATH)
+
+    monkeypatch.setattr(ye, "get_youtube_client", lambda api_key: MagicMock())
+    monkeypatch.setattr(ye, "get_uploads_playlist_id", lambda youtube, channel_id: "PL1")
+    monkeypatch.setattr(
+        ye,
+        "get_all_video_ids",
+        lambda youtube, playlist_id: [
+            {"video_id": "v1", "title": "T1", "published_at": "2024-01-01"},
+            {"video_id": "v2", "title": "T2", "published_at": "2024-01-02"},
+        ],
+    )
+    calls = []
+
+    def fake_get_comments_for_video(youtube, video_id):
+        calls.append(video_id)
+        return [{"comment_id": f"c_{video_id}", "video_id": video_id}]
+
+    monkeypatch.setattr(ye, "get_comments_for_video", fake_get_comments_for_video)
+
+    output_path = str(tmp_path / "comentarios_brutos.json")
+    result = ye.extract_channel_comments("fake_key", "UCabc", output_path)
+
+    # v1 nao deve ser reprocessado (ja estava no checkpoint), so v2 e buscado de novo
+    assert calls == ["v2"]
+    ids = [c["comment_id"] for c in result]
+    assert ids.count("c1") == 1
+    assert set(ids) == {"c1", "c_v2"}
+
+
+def test_load_progress_arquivo_corrompido_retorna_vazio(tmp_path, monkeypatch):
+    monkeypatch.setattr(ye, "PROGRESS_PATH", str(tmp_path / "progress.json"))
+    with open(ye.PROGRESS_PATH, "w", encoding="utf-8") as f:
+        f.write("{isso nao e json valido")
+
+    assert ye._load_progress() == set()
