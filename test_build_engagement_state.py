@@ -5,6 +5,7 @@ import pandas as pd
 import decay_engine as de
 from build_engagement_state import (
     get_events_cutoff,
+    load_and_score_comments,
     process_platform,
     to_decay_engine_events,
     youtube_to_universal_events,
@@ -24,6 +25,20 @@ def _eventos_duas_plataformas():
              "quality_score": 0.5, "categorias": ""},
         ]
     )
+
+
+class TestLoadAndScoreComments:
+    def test_sem_arquivos_retorna_dataframe_vazio_com_colunas(self, tmp_path):
+        raw_path = tmp_path / "comentarios_brutos.json"
+        classified_path = tmp_path / "comentarios_classificados.json"
+
+        resultado = load_and_score_comments(str(raw_path), str(classified_path))
+
+        assert isinstance(resultado, pd.DataFrame)
+        assert list(resultado.columns) == [
+            "comment_id", "author", "video_id", "published_at", "quality_score", "categorias",
+        ]
+        assert len(resultado) == 0
 
 
 class TestYoutubeToUniversalEvents:
