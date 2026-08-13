@@ -103,9 +103,11 @@ def build_events_frame(df: pd.DataFrame) -> pd.DataFrame:
     return events
 
 
-def get_events_cutoff(conn) -> pd.Timestamp | None:
-    """Timestamp do evento mais recente ja gravado no banco, ou None se vazio."""
-    row = conn.execute("SELECT MAX(published_at) FROM engagement_events").fetchone()
+def get_events_cutoff(conn, platform: str) -> pd.Timestamp | None:
+    """Timestamp do evento mais recente ja gravado para essa plataforma, ou None se vazio."""
+    row = conn.execute(
+        "SELECT MAX(published_at) FROM engagement_events WHERE platform = ?", (platform,)
+    ).fetchone()
     if row is None or row[0] is None:
         return None
     return pd.Timestamp(row[0])
