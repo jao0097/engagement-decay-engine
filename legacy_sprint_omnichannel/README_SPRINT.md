@@ -1,3 +1,7 @@
+> **Arquivado**: Reddit/Instagram foram descartados (scraping nao confiavel, revertido).
+> O motor de decaimento hoje ingere YouTube + WhatsApp (ver `whatsapp_extractor.py`
+> e `build_engagement_state.py` na raiz). Mantido so como referencia historica.
+
 # Sprint Omnichannel — Coleta de Engajamento (YouTube + Reddit + Instagram)
 
 Pipeline de 3 scripts, orcamento $0, para coletar dados publicos de

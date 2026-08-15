@@ -58,6 +58,7 @@ def test_validate_categorias_lista_vazia_cai_no_default():
 
 def test_classify_comments_propaga_resultado_para_grupo_dedup(tmp_path, monkeypatch):
     monkeypatch.setattr(cl, "CHECKPOINT_PATH", str(tmp_path / "checkpoint.json"))
+    monkeypatch.setattr(cl, "BATCH_SLEEP_SECONDS", 0)
     comments = [
         {"comment_id": "c1", "text": "conteudo unico interessante sobre o tema"},
         {"comment_id": "c2", "text": "conteudo unico interessante sobre o tema"},  # duplicata exata
@@ -80,6 +81,7 @@ def test_classify_comments_propaga_resultado_para_grupo_dedup(tmp_path, monkeypa
 
 def test_classify_comments_categoria_invalida_do_llm_vira_default(tmp_path, monkeypatch):
     monkeypatch.setattr(cl, "CHECKPOINT_PATH", str(tmp_path / "checkpoint.json"))
+    monkeypatch.setattr(cl, "BATCH_SLEEP_SECONDS", 0)
     comments = [{"comment_id": "c1", "text": "comentario qualquer bem especifico aqui"}]
     with patch.object(cl, "Groq") as MockGroq:
         client = MagicMock()

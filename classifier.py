@@ -47,8 +47,12 @@ def normalizar(text: str) -> str:
     t = re.sub(r"\s+", " ", t)
     return t
 MODEL = "llama-3.1-8b-instant"
-BATCH_SIZE = 50  # 100 arriscava truncar a resposta JSON do modelo
+# 20: tier gratuito da Groq limita 6000 tokens/min p/ este modelo; lotes de 50
+# pediam ~8000 tokens (prompt+reserva) e estouravam o limite em toda chamada,
+# nao so em pico de trafego - reduzir o retry nao resolve, so lote menor resolve.
+BATCH_SIZE = 20
 MAX_TOKENS_PER_BATCH = 4096
+BATCH_SLEEP_SECONDS = 65.0
 
 CATEGORIES = [
     "agradecimento",
@@ -230,8 +234,9 @@ def classify_comments(api_keys: list[str], comments: list[dict]) -> list[dict]:
         except Exception as e:
             print(f"  [aviso] erro ao salvar checkpoint: {e}")
 
-        # Reduzindo o sleep para 1s, pois o aumento do BATCH_SIZE ja reduz a frequencia de chamadas
-        time.sleep(1.0) 
+        # janela do limite de 6000 tokens/min da Groq reseta por minuto;
+        # esperar so 1s enfileirava lotes na mesma janela e voltava a estourar o TPM.
+        time.sleep(BATCH_SLEEP_SECONDS)
 
     # Remove o checkpoint ao terminar com sucesso
     if os.path.exists(CHECKPOINT_PATH):
